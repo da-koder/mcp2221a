@@ -2,135 +2,99 @@ const std = @import("std");
 const libusb = @import("usb/libusb.zig");
 const Context = libusb.Context;
 const Device = libusb.Device;
+const Config = libusb.Config;
 const DeviceHandle = libusb.DeviceHandle;
 const Interface = libusb.Interface;
 const Endpoint = libusb.Endpoint;
 const info = std.log.info;
 
-pub const ADC_valueIndex = enum(u16) { CH0, CH1, CH3 };
-
 pub const StatusPacket = packed struct {
     pub const I2C = packed struct {
-        dontcare_2: [3]u8, //9
-        transfer_length: u16, //2
-        transfered_length: u16, //4
-        buffer_counter: u8, //5
-        speed_deviver: u8, //6
-        timeout: u8, //7
-        address: u16, //9
-        dontcare_1: u32, //13
-        scl: u8, //14
-        sda: u8, //15
-        interrup_edge_det: u8, //16
-        read_pending: u8, //17
+        const ACK_flag: u32 = 1 << 22;
+        transfer_length: u16 align(1), //8,0
+        transfered_length: u16 align(1), //10,2
+        buffer_counter: u8, //12,4
+        speed_devider: u8, //13,5
+        timeout: u8, //14,6
+        address: u16 align(1), //15,7
+        ack_status: u32 align(1), //17,9
+        scl: u8, //21,13
+        sda: u8, //22,14
+        interrup_edge_det: u8, //23,15
+        read_pending: u8, //24,16
+        dontcare_2: [15]u8, //25,17
     };
 
     const CancelProgress = enum(u8) { Cancel = 0x00, Marked = 0x10, Idleing = 0x11 };
     const SetI2CSpeedProgress = enum(u8) { CommandNotIssued = 0x00, Considered = 0x20, NotSet = 0x21 };
+    pub const ADC = enum(u8) { CH0, CH1, CH3 };
 
-    command_code: u8, //1
-    is_completed: u8, //2
-    cancel_transfer: CancelProgress, //3
-    set_speed: SetI2CSpeedProgress, //4
-    i2c_speed_devider: u8, //5
-    dc_1: u8,
-    i2c_data: I2C, //26
-    dontcare_3: [20]u8, //46
-    hw_rev: [2]u8, //48
-    fw_rev: [2]u8, //50
-    adc_value: [3]u16, //56
-    dontcare_4: [2]u32, //63
+    command_code: u8, //0
+    is_completed: u8, //1
+    cancel_transfer: CancelProgress, //2
+    set_speed: SetI2CSpeedProgress, //3
+    i2c_speed_devider: u8, //4
+    dontcare_1: [3]u8, //5
+    i2c_data: I2C align(1), //8
+    dontcare_3: [6]u8, //40
+    hw_rev: [2]u8, //46
+    fw_rev: [2]u8, //48
+    adc_channel_value: [3]u16 align(1), //50
+    dontcare_4: [8]u8, //56
 
+    pub fn init() StatusPacket {
+        var sp: StatusPacket = undefined;
+        mem.set(u8, mem.asBytes(&sp), 0);
+        return sp;
+    }
 };
 
-pub fn getStatus(handle: *DeviceHandle, in_endpoint: Endpoint.Address, out_endpoint: Endpoint.Address) !StatusPacket {
-    var packet: [@sizeOf(StatusPacket)]u8 = [_]u8{0} ** @sizeOf(StatusPacket);
-
-    packet[0] = 0x10; //Status Parameter command.
-    _ = try handle.interruptTransfer(out_endpoint, packet[0..], 1000);
-
-    _ = try handle.interruptTransfer(in_endpoint, packet[0..], 1000);
-    return std.mem.bytesAsValue(StatusPacket, packet[0..]);
-    //  if (packet[0] == 0x10 and packet[1] == 0x0)
-    //     return std.mem.bytesAsValue(StatusPacket, &packet)
-    // else
-    //     return error.CommandFailed;
-}
-
-pub fn getHIDInterfaceDescriptor(handle: *DeviceHandle) !Interface.Descriptor {
-
-    //var device
-    _ = handle.getDevice() orelse return error.InvalidDevice;
-    var opt_interface: ?Interface.Descriptor = null;
-
-    // var cfg_desc = try device.getActiveConfigDescriptor();
-    // errdefer info("Failed to get active configuaration.", .{});
-    // defer cfg_desc.free();
-
-    // for(cfg_desc.getInterfaceArray()) |interface| {
-    //     for(interface.getAltSettingArray()) |interface_desc| {
-    //         if (interface_desc.bInterfaceClass == libusb.ClassCode.HID) {
-    //             info("HID interface found.", .{});
-    //             opt_interface = interface_desc;
-    //             break;
-    //         }
-    //     }
-    // }
-
-    return if (opt_interface) |interface| interface else error.InterfaceNotFound;
-}
-
+const HID = libusb.HID;
+const mem = std.mem;
+const ascii = std.ascii;
 pub fn main() anyerror!void {
-    //Let's find the microchip usb-serial.
-    var ctx = try Context.init();
-    errdefer info("Failed to initialize library.", .{});
-    defer ctx.deinit();
+    var hid = try HID.open(0x04d8, 0x00dd);
+    defer hid.close();
+    info("{hid = {}", .{hid});
 
-    var handle = try ctx.openDeviceWithVidPid(0x04d8, 0x00dd);
-    errdefer info("Failed to open device with the vid/pid", .{});
-    defer handle.close();
+    var status = StatusPacket.init();
+    status.command_code = 0x10;
+    _ = try hid.write(mem.asBytes(&status));
+    _ = try hid.read(mem.asBytes(&status));
 
-    //Find HID interface.
-    var interface_desc = try getHIDInterfaceDescriptor(handle);
-    errdefer info("HID interface not found.", .{});
-    var interface = interface_desc.bInterfaceNumber;
-
-    try handle.claimInterface(interface);
-    errdefer info("Failed to claim interface.\n", .{});
-    defer handle.releaseInterface(interface);
-
-    var in_endpoint: Endpoint.Address = undefined;
-    var out_endpoint: Endpoint.Address = undefined;
-    for (interface_desc.getEndpointArray()) |endpoint_desc| {
-        if (endpoint_desc.bEndpointAddress.direction == Endpoint.Direction.IN)
-            in_endpoint = endpoint_desc.bEndpointAddress
-        else
-            out_endpoint = endpoint_desc.bEndpointAddress;
-    }
-
-    var status = try getStatus(handle, in_endpoint, out_endpoint);
-    errdefer info("Failed to get status.", .{});
-
-    info("Revision = {c}.{c}.{c}.{c}", .{ status.hw_rev[0], status.hw_rev[1], status.fw_rev[0], status.fw_rev[1] });
+    info("Revision = {s}-{s}", .{ status.hw_rev, status.fw_rev });
 }
 
 const expect = std.testing.expect;
 const print = std.debug.print;
 
+fn changeArray(arr: []u8) void {
+    arr[3] = 1;
+}
+
+test "chnange parameter" {
+    var all_zeros = [_]u8{0} ** 8;
+    changeArray(all_zeros[0..]);
+    try expect(all_zeros[3] == 1);
+}
+
 test "basic test" {
     // const packet: StatusPacket = undefined;
     print("Size of *StatusPacket = {d}*, I2C = {d}.\n", .{ @sizeOf(StatusPacket), @sizeOf(StatusPacket.I2C) });
+    const data_ofs = @offsetOf(StatusPacket, "i2c_data");
+    print("Offset of i2c_data = {d}.\n", .{data_ofs});
+    print("Offset of hw_rev = {d}.\n", .{@offsetOf(StatusPacket, "hw_rev")});
+
+    const tl_sz = @offsetOf(StatusPacket.I2C, "transfer_length");
+    print("Offset of transfer_length = {d}, {d}.\n", .{ data_ofs + tl_sz, tl_sz });
+    print("Offset of scl = {d}.\n", .{@offsetOf(StatusPacket.I2C, "scl")});
     print("Offset of dontcare_4 = {d}.\n", .{@offsetOf(StatusPacket, "dontcare_4")});
-    print("Offset of i2c_data = {d}.\n", .{@offsetOf(StatusPacket, "i2c_data")});
-    print("Size of dontcare_4 = {d}.\n", .{@sizeOf(StatusPacket)});
-    print("Type of StatusPacket = {s}.\n", .{@typeName(StatusPacket)});
 
     var packet = [_]u8{0} ** @sizeOf(StatusPacket);
     packet[46] = 'A';
     packet[47] = '6';
 
-    var status = std.mem.bytesAsValue(StatusPacket, &packet);
-    print("Hardware rev = {c}{c}.\n", .{ status.hw_rev[0], status.hw_rev[1] });
+    // var status = std.mem.bytesAsValue(StatusPacket, &packet);
+    // print("Hardware rev = {c}{c}.\n", .{ status.hw_rev[0], status.hw_rev[1] });
     //    print("Size of dontcare_4 = {d}.\n", .{@sizeOf(StatusPacket.dontcare_4)});
-    try expect(@sizeOf(StatusPacket) == 64);
 }
