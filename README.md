@@ -2,7 +2,7 @@
 MCP2221A interface library using the usb repo for zig lang
 
 **Example usage**
-1. `git clone [repo]https://github.com/da-koder/mcp2221a.git`
+1. `git clone https://github.com/da-koder/mcp2221a.git`
 2. `cd mcp2221a`
 3. `zig build`
 4. `sudo zig build run`
