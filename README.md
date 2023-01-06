@@ -1,5 +1,6 @@
 # mcp2221a
-MCP2221A interface library using the usb repo for zig lang
+[MCP2221A](http://ww1.microchip.com/downloads/en/devicedoc/20005565b.pdf) interface library using the usb repo for zig lang.
+I know I can just wrap the c library they provide, but this is for practicing usb IO datasheet -> code and zig.
 
 **Example usage**
 1. `git clone https://github.com/da-koder/mcp2221a.git`
