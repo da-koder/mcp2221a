@@ -35,7 +35,7 @@ pub const HID = struct {
 
                     for (interface_desc.getEndpointArray()) |ep_desc| {
                         if (ep_desc.bmAttributes.transferType == libusb.TransferType.INTERRUPT) {
-                            if (ep_desc.bEndpointAddress.direction == libusb.Endpoint.Direction.IN) {
+                            if (ep_desc.bEndpointAddress.direction == Endpoint.Direction.IN) {
                                 self.in = ep_desc.bEndpointAddress;
                             } else {
                                 self.out = ep_desc.bEndpointAddress;

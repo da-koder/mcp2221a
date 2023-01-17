@@ -1,23 +1,22 @@
 const std = @import("std");
 const libusb = @import("usb/libusb.zig");
-const Context = libusb.Context;
-const Device = libusb.Device;
-const Config = libusb.Config;
-const DeviceHandle = libusb.DeviceHandle;
-const Interface = libusb.Interface;
-const Endpoint = libusb.Endpoint;
+
 const info = std.log.info;
+
+//STATUS/SET PARAMETERS command and response.
+pub const Command = enum(u8) { GetStatus = 0x10, ReadFlashData = 0xB0 };
+pub const CommandStatus = enum(u8) { Completed, NotSupported };
 
 pub const StatusPacket = packed struct {
     pub const I2C = packed struct {
         const ACK_flag: u32 = 1 << 22;
-        transfer_length: u16 align(1), //8,0
-        transfered_length: u16 align(1), //10,2
+        transfer_length: u16, //8,0
+        transfered_length: u16, //10,2
         buffer_counter: u8, //12,4
         speed_devider: u8, //13,5
         timeout: u8, //14,6
-        address: u16 align(1), //15,7
-        ack_status: u32 align(1), //17,9
+        address: u16, //15,7
+        ack_status: u32, //17,9
         scl: u8, //21,13
         sda: u8, //22,14
         interrup_edge_det: u8, //23,15
@@ -29,17 +28,17 @@ pub const StatusPacket = packed struct {
     const SetI2CSpeedProgress = enum(u8) { CommandNotIssued = 0x00, Considered = 0x20, NotSet = 0x21 };
     pub const ADC = enum(u8) { CH0, CH1, CH3 };
 
-    command_code: u8, //0
-    is_completed: u8, //1
+    command_code: Command, //0
+    is_completed: CommandStatus, //1
     cancel_transfer: CancelProgress, //2
     set_speed: SetI2CSpeedProgress, //3
     i2c_speed_devider: u8, //4
     dontcare_1: [3]u8, //5
-    i2c_data: I2C align(1), //8
+    i2c_data: I2C, //8
     dontcare_3: [6]u8, //40
     hw_rev: [2]u8, //46
     fw_rev: [2]u8, //48
-    adc_channel_value: [3]u16 align(1), //50
+    adc_channel_value: [3]u16, //50
     dontcare_4: [8]u8, //56
 
     pub fn init() StatusPacket {
@@ -51,32 +50,154 @@ pub const StatusPacket = packed struct {
 
 const HID = libusb.HID;
 const mem = std.mem;
-const ascii = std.ascii;
+
+pub fn getStatus(hid: *HID) !StatusPacket {
+    var packet = StatusPacket.init();
+    packet.command_code = Command.GetStatus;
+    _ = try hid.write(mem.asBytes(&packet));
+    _ = try hid.read(mem.asBytes(&packet));
+    return if (packet.command_code == Command.GetStatus and packet.is_completed == CommandStatus.Completed)
+        packet
+    else
+        error.InvalidCommand;
+}
+
+pub const FlashDataTag = enum(u8) { chip_settings = 0, gp_settings, manufacture_string, product_string, serial_number_string, chip_factory_serial_number };
+
+pub const FlashData = union(FlashDataTag) { chip_settings: ChipSettingsPacket, gp_settings: GPSettingsPacket, manufacture_string: ManufactureStringPacket, product_string: ProductStringPacket, serial_number_string: SerialNumberStringPacket, chip_factory_serial_number: ChipFactorySerialNumberPacket };
+
+pub const ChipSettingsPacket = packed struct {
+    pub const EnumerationWithSerial = enum(u1) {
+        // No serial number descriptor will be presented during the USB enumeration.
+        Disable,
+        // The USB serial number will be used during the USB enumeration of the CDC interface.
+        Enable,
+    };
+
+    pub const ChipConfigSecurity = enum(u2) { Unsecured, PasswordProceted, PermanentlyLocked };
+
+    pub const ClockDevider = packed struct {
+        // Clock Output divider value — If the GP pin (exposing the clock output) is enabled for clock output operation,
+        // the divider value will be used on the 48 MHz USB internal clock and its divided output will be sent to this pin.
+        devider: u5,
+        dont_care_2: u3,
+    };
+    pub const CDC = packed struct {
+
+        // Chip Configuration security option
+        chip_security: ChipConfigSecurity,
+        // Initial value for USBCFG pin option
+        //  — This value represents the logic level signaled when the device is not USB configured.
+        //  When the device will be USB configured, the USBCFG pin (if enabled) will take the negated value of this bit.
+        usbcfg: u1,
+        // Initial value for SSPND pin option
+        // — This value represents the logic level signaled when the device is not in Suspend mode.
+        // Upon entering Suspend mode, the SSPND pin (if enabled) will take the negated value of this bit.
+        sspnd: u1,
+        // Initial value for LEDI2C pin option
+        // — This value represents the logic level signaled when no I2C traffic occurs.
+        // When the I2 C traffic is active, the LEDI2C pin (if enabled) will take the negated value of this bit.
+        led_i2c: u1,
+        // Initial value for LEDUARTTX pin option
+        // — This value represents the logic level signaled when no UART T X transmission takes place.
+        // When the UART T X (of the MCP2221A) is sending data, the LEDUARTTX pin will take the negated value of this bit.
+        led_uart_tx: u1,
+        //Initial value for LEDUARTRX pin option.
+        //This value represents the logic level signaled when no UART RX activity takes places.
+        //When the UART RX (of the MCP2221A) is receiving data, the LEDUARTRX pin will take the negated value of this bit.
+        led_uart_rx: u1,
+        // CDC Serial Number Enumeration Enable
+        enumeration_enable: EnumerationWithSerial,
+    };
+
+    pub const VrmOption = enum(u2) { OFF = 0, v1_024, v2_048, v4_096 };
+    pub const ReferenceVoltageOption = enum(u1) { Vdd = 0, Vrm };
+    pub const DAC = packed struct { startup_value: u5, reference_option: ReferenceVoltageOption, reference_voltage: VrmOption };
+
+    pub const ADC = packed struct { dont_care_3: u2, reference_option: ReferenceVoltageOption, reference_voltage: VrmOption, positive_edge_interrupt: bool, negative_edge_interrupt: bool, dont_care_4: u1 };
+
+    command_code: Command,
+    is_completed: CommandStatus,
+    length: u8,
+    dont_care1: u8,
+    pin_config: CDC,
+    clock_output: ClockDevider,
+    dac_config: DAC,
+    adc_config: ADC,
+    vid: u16,
+    pid: u16,
+    // USB power attributes(1) — This value will be used by the MCP2221A’s USB Configuration Descriptor (power attributes value) during the USB enumeration.
+    power_attributes: u8,
+    // USB requested number of mA(s)(1) — The requested mA value during the USB enumeration will represent the value at this index multiplied by 2.
+    requested_mA: u8,
+    donct_care5: [50]u8,
+
+    pub fn init() ChipSettingsPacket {
+        var cs_packet: ChipSettingsPacket = undefined;
+        mem.set(u8, mem.asBytes(&cs_packet), 0);
+        return cs_packet;
+    }
+};
+
+pub const GPSettingsPacket = packed struct {
+    data: [64]u8 = [_]u8{0} ** 64,
+};
+
+pub const ManufactureStringPacket = packed struct {
+    data: [64]u8 = [_]u8{0} ** 64,
+};
+pub const ProductStringPacket = packed struct {
+    data: [64]u8 = [_]u8{0} ** 64,
+};
+pub const SerialNumberStringPacket = packed struct {
+    data: [64]u8 = [_]u8{0} ** 64,
+};
+pub const ChipFactorySerialNumberPacket = packed struct {
+    data: [64]u8 = [_]u8{0} ** 64,
+};
+
+pub fn readFlashData(hid: *HID, flash_type: FlashDataTag) !FlashData {
+    const CODE_IDX = 0;
+    const SUBCODE_IDX = 1;
+    const IS_COMPLETED_IDX = 1;
+    var packet = switch (flash_type) {
+        .chip_settings => FlashData{ .chip_settings = ChipSettingsPacket.init() },
+        .gp_settings => FlashData{ .gp_settings = undefined },
+        .manufacture_string => FlashData{ .manufacture_string = undefined },
+        .product_string => FlashData{ .product_string = undefined },
+        .serial_number_string => FlashData{ .serial_number_string = undefined },
+        .chip_factory_serial_number => FlashData{ .chip_factory_serial_number = undefined },
+    };
+    var bytes = mem.asBytes(&packet);
+    bytes[CODE_IDX] = @enumToInt(Command.ReadFlashData);
+    bytes[SUBCODE_IDX] = @enumToInt(flash_type);
+    _ = try hid.write(bytes);
+    _ = try hid.read(bytes);
+    return if (bytes[CODE_IDX] == @enumToInt(Command.ReadFlashData) and bytes[IS_COMPLETED_IDX] == @enumToInt(CommandStatus.Completed))
+        packet
+    else
+        error.InvalidCommand;
+}
+
+pub fn readChipSettings(hid: *HID) !ChipSettingsPacket {
+    return (try readFlashData(hid, FlashDataTag.chip_settings)).chip_settings;
+}
+
 pub fn main() anyerror!void {
     var hid = try HID.open(0x04d8, 0x00dd);
     defer hid.close();
     info("{hid = {}", .{hid});
 
-    var status = StatusPacket.init();
-    status.command_code = 0x10;
-    _ = try hid.write(mem.asBytes(&status));
-    _ = try hid.read(mem.asBytes(&status));
+    var status = try getStatus(hid);
+    var chip_settings = try readChipSettings(hid);
 
     info("Revision = {s}-{s}", .{ status.hw_rev, status.fw_rev });
+    info("VID, PID = [{X}, {X}]", .{ chip_settings.vid, chip_settings.pid });
+    info("DAC and ADC configs = {}\n{}.", .{ chip_settings.dac_config, chip_settings.adc_config });
 }
 
 const expect = std.testing.expect;
 const print = std.debug.print;
-
-fn changeArray(arr: []u8) void {
-    arr[3] = 1;
-}
-
-test "chnange parameter" {
-    var all_zeros = [_]u8{0} ** 8;
-    changeArray(all_zeros[0..]);
-    try expect(all_zeros[3] == 1);
-}
 
 test "basic test" {
     // const packet: StatusPacket = undefined;
@@ -89,12 +210,10 @@ test "basic test" {
     print("Offset of transfer_length = {d}, {d}.\n", .{ data_ofs + tl_sz, tl_sz });
     print("Offset of scl = {d}.\n", .{@offsetOf(StatusPacket.I2C, "scl")});
     print("Offset of dontcare_4 = {d}.\n", .{@offsetOf(StatusPacket, "dontcare_4")});
+}
 
-    var packet = [_]u8{0} ** @sizeOf(StatusPacket);
-    packet[46] = 'A';
-    packet[47] = '6';
-
-    // var status = std.mem.bytesAsValue(StatusPacket, &packet);
-    // print("Hardware rev = {c}{c}.\n", .{ status.hw_rev[0], status.hw_rev[1] });
-    //    print("Size of dontcare_4 = {d}.\n", .{@sizeOf(StatusPacket.dontcare_4)});
+test "ChipSettings sizes" {
+    print("Size of ChipSettingsPacket = {d}\n", .{@sizeOf(ChipSettingsPacket)});
+    print("Offset of DAC = {d}\n", .{@offsetOf(ChipSettingsPacket, "dac_config")});
+    print("Offset of vid = {d}\n", .{@offsetOf(ChipSettingsPacket, "vid")});
 }
