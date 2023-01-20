@@ -14,7 +14,7 @@ pub fn build(b: *std.build.Builder) void {
     const exe = b.addExecutable("mcp2221a", "src/main.zig");
     exe.setTarget(target);
     exe.setBuildMode(mode);
-    exe.addLibPath("/usr/lib");
+    exe.addLibraryPath("/usr/lib");
     exe.linkLibC();
     exe.linkSystemLibrary("usb-1.0");
     exe.install();
@@ -31,7 +31,7 @@ pub fn build(b: *std.build.Builder) void {
     const exe_tests = b.addTest("src/main.zig");
     exe_tests.setTarget(target);
     exe_tests.setBuildMode(mode);
-    exe_tests.addLibPath("/usr/lib");
+    exe_tests.addLibraryPath("/usr/lib");
     exe_tests.linkLibC();
     exe_tests.linkSystemLibrary("usb-1.0");
 

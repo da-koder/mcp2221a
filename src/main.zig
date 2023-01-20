@@ -7,16 +7,16 @@ const info = std.log.info;
 pub const Command = enum(u8) { GetStatus = 0x10, ReadFlashData = 0xB0 };
 pub const CommandStatus = enum(u8) { Completed, NotSupported };
 
-pub const StatusPacket = packed struct {
-    pub const I2C = packed struct {
+pub const StatusPacket = extern struct {
+    pub const I2C = extern struct {
         const ACK_flag: u32 = 1 << 22;
         transfer_length: u16, //8,0
         transfered_length: u16, //10,2
         buffer_counter: u8, //12,4
         speed_devider: u8, //13,5
         timeout: u8, //14,6
-        address: u16, //15,7
-        ack_status: u32, //17,9
+        address: u16 align(1), //15,7
+        ack_status: u32 align(1), //17,9
         scl: u8, //21,13
         sda: u8, //22,14
         interrup_edge_det: u8, //23,15
@@ -64,9 +64,9 @@ pub fn getStatus(hid: *HID) !StatusPacket {
 
 pub const FlashDataTag = enum(u8) { chip_settings = 0, gp_settings, manufacture_string, product_string, serial_number_string, chip_factory_serial_number };
 
-pub const FlashData = union(FlashDataTag) { chip_settings: ChipSettingsPacket, gp_settings: GPSettingsPacket, manufacture_string: ManufactureStringPacket, product_string: ProductStringPacket, serial_number_string: SerialNumberStringPacket, chip_factory_serial_number: ChipFactorySerialNumberPacket };
+pub const FlashData = union(FlashDataTag) { chip_settings: ChipSettingsPacket, gp_settings: GPSettingsPacket, manufacture_string: StringPacket, product_string: StringPacket, serial_number_string: StringPacket, chip_factory_serial_number: ChipFactorySerialNumberPacket };
 
-pub const ChipSettingsPacket = packed struct {
+pub const ChipSettingsPacket = extern struct {
     pub const EnumerationWithSerial = enum(u1) {
         // No serial number descriptor will be presented during the USB enumeration.
         Disable,
@@ -139,29 +139,67 @@ pub const ChipSettingsPacket = packed struct {
     }
 };
 
-pub const GPSettingsPacket = packed struct {
-    data: [64]u8 = [_]u8{0} ** 64,
+pub fn GP(comptime i: u8) type {
+    return packed struct {
+        pub fn Functions(comptime a: u8) type {
+            return switch (a) {
+                0 => enum(u3) { gpio, sspnd, uart_rx_led },
+                1 => enum(u3) { gpio, clk_output, adc1, uart_tx_led, int_detect },
+                2 => enum(u3) { gpio, usb, adc2, dac1 },
+                3 => enum(u3) { gpio, i2c_led, adc3, dac2 },
+                else => enum(u3) { gpio },
+            };
+        }
+
+        pub const Direction = enum(u1) { output, input };
+        pub const Logic = enum(u1) { low, high };
+        const PinFunctions = Functions(i);
+        designation: PinFunctions,
+        direction: Direction,
+        value: Logic,
+        dont_care: u3,
+    };
+}
+
+pub const GPSettingsPacket = extern struct {
+    command: Command,
+    is_complete: CommandStatus,
+    length: u8,
+    dont_care: u8,
+
+    gp0: GP(0),
+    gp1: GP(1),
+    gp2: GP(2),
+    gp3: GP(3),
+
+    dont_care2: [56]u8,
 };
 
-pub const ManufactureStringPacket = packed struct {
-    data: [64]u8 = [_]u8{0} ** 64,
+const CODE_IDX = 0;
+const SUBCODE_IDX = 1;
+const IS_COMPLETED_IDX = 1;
+
+pub const StringPacket = extern struct {
+    command: Command,
+    is_complete: CommandStatus,
+    length: u8,
+    dont_cate: u8,
+    utf16_string: [30]u16,
+
+    pub fn toString(self: @This()) ![]u8 {
+        var str: [60]u8 = undefined;
+        _ = try std.unicode.utf16leToUtf8(&str, &self.utf16_string);
+        return str[0..((self.length / 2) - 1)];
+    }
 };
-pub const ProductStringPacket = packed struct {
-    data: [64]u8 = [_]u8{0} ** 64,
-};
-pub const SerialNumberStringPacket = packed struct {
-    data: [64]u8 = [_]u8{0} ** 64,
-};
-pub const ChipFactorySerialNumberPacket = packed struct {
+
+pub const ChipFactorySerialNumberPacket = extern struct {
     data: [64]u8 = [_]u8{0} ** 64,
 };
 
 pub fn readFlashData(hid: *HID, flash_type: FlashDataTag) !FlashData {
-    const CODE_IDX = 0;
-    const SUBCODE_IDX = 1;
-    const IS_COMPLETED_IDX = 1;
     var packet = switch (flash_type) {
-        .chip_settings => FlashData{ .chip_settings = ChipSettingsPacket.init() },
+        .chip_settings => FlashData{ .chip_settings = undefined },
         .gp_settings => FlashData{ .gp_settings = undefined },
         .manufacture_string => FlashData{ .manufacture_string = undefined },
         .product_string => FlashData{ .product_string = undefined },
@@ -183,17 +221,29 @@ pub fn readChipSettings(hid: *HID) !ChipSettingsPacket {
     return (try readFlashData(hid, FlashDataTag.chip_settings)).chip_settings;
 }
 
+pub fn readGPSettings(hid: *HID) !GPSettingsPacket {
+    return (try readFlashData(hid, FlashDataTag.gp_settings)).gp_settings;
+}
+
+pub fn readManufactorString(hid: *HID) !StringPacket {
+    return (try readFlashData(hid, FlashDataTag.manufacture_string)).manufacture_string;
+}
+
 pub fn main() anyerror!void {
     var hid = try HID.open(0x04d8, 0x00dd);
     defer hid.close();
-    info("{hid = {}", .{hid});
+    // info("{hid = {}", .{hid});
 
     var status = try getStatus(hid);
     var chip_settings = try readChipSettings(hid);
+    var gp_settings = try readGPSettings(hid);
+    var manufacture = try readManufactorString(hid);
 
     info("Revision = {s}-{s}", .{ status.hw_rev, status.fw_rev });
     info("VID, PID = [{X}, {X}]", .{ chip_settings.vid, chip_settings.pid });
     info("DAC and ADC configs = {}\n{}.", .{ chip_settings.dac_config, chip_settings.adc_config });
+    info("gp0 and gp1 configs = {}\n{}.", .{ gp_settings.gp0, gp_settings.gp1 });
+    info("Manufacture = {s}", .{try (&manufacture).toString()});
 }
 
 const expect = std.testing.expect;
