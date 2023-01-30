@@ -9,8 +9,8 @@ I know I can just wrap the c library they provide, but this is for practicing us
 4. `sudo zig build run`
 
 **Current**
-- It's current state only has one command for the chip i.e get_status.
-- zig 0.10 breaks it for now.
+- Commands: getstatus, readFlashdata( chipsettings, gpsettings, manufacturer, product, serial_number, factory_serial).
+- Now works with zig 0.10.
 
 **TODO v1.0**
 - 0.5: Add the rest of the commands. 

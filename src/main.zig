@@ -194,7 +194,15 @@ pub const StringPacket = extern struct {
 };
 
 pub const ChipFactorySerialNumberPacket = extern struct {
-    data: [64]u8 = [_]u8{0} ** 64,
+    command: Command,
+    is_complete: CommandStatus,
+    length: u8,
+    dont_care: u8,
+    data: [60]u8 = [_]u8{0} ** 60,
+
+    pub fn toSting(self: @This()) ![]u8 {
+        return self.data[0..self.length];
+    }
 };
 
 pub fn readFlashData(hid: *HID, flash_type: FlashDataTag) !FlashData {
@@ -229,6 +237,18 @@ pub fn readManufactorString(hid: *HID) !StringPacket {
     return (try readFlashData(hid, FlashDataTag.manufacture_string)).manufacture_string;
 }
 
+pub fn readProductString(hid: *HID) !StringPacket {
+    return (try readFlashData(hid, FlashDataTag.product_string)).product_string;
+}
+
+pub fn readSerialNumberString(hid: *HID) !StringPacket {
+    return (try readFlashData(hid, FlashDataTag.serial_number_string)).serial_number_string;
+}
+
+pub fn readFactorySerialNumber(hid: *HID) !StringPacket {
+    return (try readFlashData(hid, FlashDataTag.chip_factory_serial_number)).chip_factory_serial_number;
+}
+
 pub fn main() anyerror!void {
     var hid = try HID.open(0x04d8, 0x00dd);
     defer hid.close();
@@ -238,12 +258,18 @@ pub fn main() anyerror!void {
     var chip_settings = try readChipSettings(hid);
     var gp_settings = try readGPSettings(hid);
     var manufacture = try readManufactorString(hid);
+    var product = try readProductString(hid);
+    var serial_number = try readSerialNumberString(hid);
+    var factory_serial_number = try readSerialNumberString(hid);
 
     info("Revision = {s}-{s}", .{ status.hw_rev, status.fw_rev });
     info("VID, PID = [{X}, {X}]", .{ chip_settings.vid, chip_settings.pid });
     info("DAC and ADC configs = {}\n{}.", .{ chip_settings.dac_config, chip_settings.adc_config });
     info("gp0 and gp1 configs = {}\n{}.", .{ gp_settings.gp0, gp_settings.gp1 });
     info("Manufacture = {s}", .{try (&manufacture).toString()});
+    info("Product = {s}", .{try (&product).toString()});
+    info("Serial Number = {s}", .{try (&serial_number).toString()});
+    info("Chip Factory Serial Number = {s}", .{try (&factory_serial_number).toString()});
 }
 
 const expect = std.testing.expect;
